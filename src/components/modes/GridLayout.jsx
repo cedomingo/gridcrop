@@ -70,8 +70,7 @@ export default function GridLayout({
       />
 
       <p style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.5, margin: 0 }}>
-        Mix px and fr like CSS Grid: fixed px tracks are reserved first, then fr tracks split
-        whatever space is left, proportionally.
+        Note: px stays a fixed size, while ratio shares the remaining space proportionally.
       </p>
     </div>
   )

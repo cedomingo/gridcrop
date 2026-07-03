@@ -119,6 +119,7 @@ export default function MainEditor({ image, bounds, onChangePhoto }) {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            background: 'var(--paper-50)',
           }}
         >
           <span className="label-eyebrow">

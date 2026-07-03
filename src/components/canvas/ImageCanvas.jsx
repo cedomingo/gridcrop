@@ -13,7 +13,7 @@ const handlePos = {
 }
 
 const MIN_ZOOM = 0.1 // 10%
-const MAX_ZOOM = 4 // 400%
+const MAX_ZOOM = 1000 // 100000%
 const ZOOM_BUTTON_STEP = 1.2 // multiplicative step per click
 const ZOOM_WHEEL_SENSITIVITY = 0.0015
 
@@ -57,9 +57,13 @@ export default function ImageCanvas({
 
   // User-controlled zoom multiplier on top of baseScale. 1 = fit.
   const [zoom, setZoom] = useState(1)
-  // Reset zoom back to fit whenever the working bounds change meaningfully.
+  // Pan offset (screen px) applied on top of the centered stage.
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+
+  // Reset zoom + pan back to fit whenever the working bounds change meaningfully.
   useEffect(() => {
     setZoom(1)
+    setPan({ x: 0, y: 0 })
   }, [bounds.x, bounds.y, bounds.w, bounds.h])
 
   const scale = baseScale * zoom
@@ -67,11 +71,53 @@ export default function ImageCanvas({
   const dispW = bounds.w * scale
   const dispH = bounds.h * scale
 
+  // Kept in sync every render so the wheel listener (attached once, in an
+  // effect with an empty dep array) can always read fresh values without
+  // needing to be torn down and re-attached on every zoom/pan/resize.
+  const viewRef = useRef({ zoom, pan, stageSize, baseScale, bounds })
+  viewRef.current = { zoom, pan, stageSize, baseScale, bounds }
+
+  // Change zoom to `newZoomRaw` while keeping the local canvas point that is
+  // currently under screen position (px, py) — relative to the stage
+  // element's top-left — visually fixed under that same screen position.
+  // This is what makes scroll-to-zoom and the zoom buttons "zoom toward"
+  // a point instead of always zooming from the center.
+  function zoomAtPoint(newZoomRaw, px, py) {
+    const { zoom: curZoom, pan: curPan, stageSize: ss, baseScale: bs, bounds: b } = viewRef.current
+    const newZoom = clampZoom(newZoomRaw)
+    if (newZoom === curZoom) return
+
+    const oldScale = bs * curZoom
+    const newScale = bs * newZoom
+    const oldDispW = b.w * oldScale
+    const oldDispH = b.h * oldScale
+    const newDispW = b.w * newScale
+    const newDispH = b.h * newScale
+
+    // Screen position of the stage-inner element's top-left corner,
+    // relative to the stage container — mirrors the centering + pan
+    // transform applied in the render below.
+    const originX = ss.w / 2 - oldDispW / 2 + curPan.x
+    const originY = ss.h / 2 - oldDispH / 2 + curPan.y
+
+    // The local (bounds-relative) point currently under the cursor.
+    const localX = (px - originX) / oldScale
+    const localY = (py - originY) / oldScale
+
+    // Solve for the pan that keeps that same local point under (px, py)
+    // once the new scale is applied.
+    const newPanX = px - ss.w / 2 + newDispW / 2 - localX * newScale
+    const newPanY = py - ss.h / 2 + newDispH / 2 - localY * newScale
+
+    setZoom(newZoom)
+    setPan({ x: newPanX, y: newPanY })
+  }
+
   function zoomIn() {
-    setZoom((z) => clampZoom(z * ZOOM_BUTTON_STEP))
+    zoomAtPoint(zoom * ZOOM_BUTTON_STEP, stageSize.w / 2, stageSize.h / 2)
   }
   function zoomOut() {
-    setZoom((z) => clampZoom(z / ZOOM_BUTTON_STEP))
+    zoomAtPoint(zoom / ZOOM_BUTTON_STEP, stageSize.w / 2, stageSize.h / 2)
   }
 
   // --- zoom textbox (shows/edits percentage of the fit scale) ---
@@ -82,29 +128,48 @@ export default function ImageCanvas({
     if (zoomDraft === null) return
     const parsed = parseInt(zoomDraft, 10)
     if (Number.isFinite(parsed) && parsed > 0) {
-      setZoom(clampZoom(parsed / 100))
+      zoomAtPoint(parsed / 100, stageSize.w / 2, stageSize.h / 2)
     }
     setZoomDraft(null)
   }
 
-  // --- shift + scroll to zoom ---
+  // --- scroll to zoom ---
+  // The listener is attached directly to the stage element (not via React's
+  // onWheel) so we can pass { passive: false } and always call
+  // preventDefault()/stopPropagation(). Without that, an un-prevented wheel
+  // event bubbles up and scrolls whatever scrollable ancestor is under the
+  // cursor (e.g. the sidebar), which is what made the zoom controls appear
+  // to "disappear" — the whole page was scrolling, not just the canvas.
+  //
+  // The handler reads zoom/pan/stageSize/bounds from viewRef (not from
+  // closure state) so this effect can stay mounted once with an empty dep
+  // array while still always zooming relative to the current view — and,
+  // critically, toward the cursor position rather than the stage center.
   useEffect(() => {
     const el = stageRef.current
     if (!el) return
     function onWheel(e) {
-      if (!e.shiftKey) return
       e.preventDefault()
+      e.stopPropagation()
+    if (e.target.closest('[data-zoom-controls]')) {
+      return
+    }
+      const r = el.getBoundingClientRect()
+      const px = e.clientX - r.left
+      const py = e.clientY - r.top
       const factor = Math.exp(-e.deltaY * ZOOM_WHEEL_SENSITIVITY)
-      setZoom((z) => clampZoom(z * factor))
+      const { zoom: curZoom } = viewRef.current
+      zoomAtPoint(curZoom * factor, px, py)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   const drag = useRef(null)
+  const panDrag = useRef(null)
   const [drawing, setDrawing] = useState(null) // temp rect while creating a new section
 
-  function toLocal(e, rect) {
+  function toLocal(e) {
     const el = stageRef.current.querySelector('.cg-stage-inner')
     const r = el.getBoundingClientRect()
     return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }
@@ -129,9 +194,37 @@ export default function ImageCanvas({
     return { x, y, w, h }
   }
 
-  // --- create new section by drag on empty canvas ---
+  // --- right-click drag to pan ---
+  function onPanMove(e) {
+    if (!panDrag.current) return
+    const { startX, startY, startPan } = panDrag.current
+    setPan({ x: startPan.x + (e.clientX - startX), y: startPan.y + (e.clientY - startY) })
+  }
+  function onPanUp() {
+    panDrag.current = null
+    window.removeEventListener('pointermove', onPanMove)
+    window.removeEventListener('pointerup', onPanUp)
+    const el = stageRef.current
+    if (el) el.style.cursor = ''
+  }
+  function startPan(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    panDrag.current = { startX: e.clientX, startY: e.clientY, startPan: { ...pan } }
+    const el = stageRef.current
+    if (el) el.style.cursor = 'grabbing'
+    window.addEventListener('pointermove', onPanMove)
+    window.addEventListener('pointerup', onPanUp)
+  }
+
+  // --- create new section by drag on empty canvas (left click only) ---
   function onStageDown(e) {
+    if (e.button === 2) {
+      startPan(e)
+      return
+    }
     if (!customMode) return
+    if (e.button !== 0) return
     if (e.target.closest('[data-section]')) return // clicked an existing section
     if (e.target.closest('[data-zoom-controls]')) return // clicked the zoom UI
     const start = toLocal(e)
@@ -147,7 +240,7 @@ export default function ImageCanvas({
       return { ...d, x1: p.x, y1: p.y }
     })
   }
-  function onStageUp(e) {
+  function onStageUp() {
     window.removeEventListener('pointermove', onStageMove)
     window.removeEventListener('pointerup', onStageUp)
     setDrawing((d) => {
@@ -170,6 +263,7 @@ export default function ImageCanvas({
 
   // --- move / resize existing section ---
   function onHandleDown(id, handle, e) {
+    if (e.button === 2) return // right click reserved for panning
     e.preventDefault()
     e.stopPropagation()
     const section = sections.find((s) => s.id === id)
@@ -239,12 +333,31 @@ export default function ImageCanvas({
         justifyContent: 'center',
         position: 'relative',
         overflow: 'hidden',
+        touchAction: 'none',
       }}
       onPointerDown={onStageDown}
+      onContextMenu={(e) => e.preventDefault()}
     >
       <div
         className="cg-stage-inner"
-        style={{ position: 'relative', width: dispW, height: dispH, cursor: customMode ? 'crosshair' : 'default' }}
+        style={{
+          position: 'absolute',
+          left: '50%',
+          top: '50%',
+          width: dispW,
+          height: dispH,
+          // Centering + panning both live in this one transform. Because the
+          // element is position:absolute, its box size (which can get huge
+          // at high zoom) never contributes to the size of the stage — the
+          // stage's own flex/minHeight rules are all that determine its
+          // size, and overflow:hidden on the stage clips the rest. Before,
+          // this div was a normal (in-flow) flex child, so a large zoomed
+          // width/height could inflate the stage's — and therefore the
+          // page's — layout, pushing the sidebar and the zoom controls off
+          // screen.
+          transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px))`,
+          cursor: customMode ? 'crosshair' : 'default',
+        }}
       >
         <img
           src={image.src}

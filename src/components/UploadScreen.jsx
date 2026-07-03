@@ -31,13 +31,28 @@ export default function UploadScreen({ onFile, error }) {
         padding: 24,
       }}
     >
+      <style>{`
+        @keyframes cropgrid-float {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-6px); }
+        }
+        @keyframes cropgrid-marching-ants {
+          to { stroke-dashoffset: -14; }
+        }
+        .cropgrid-glyph {
+          animation: cropgrid-float 2.2s ease-in-out infinite;
+        }
+        .cropgrid-dropzone.active .cropgrid-dash {
+          animation: cropgrid-marching-ants 0.6s linear infinite;
+        }
+      `}</style>
+
       <div style={{ textAlign: 'center', marginBottom: 36 }}>
         <div className="label-eyebrow" style={{ marginBottom: 10 }}>
-          crop_1 · crop_2 · crop_3 · crop_n
         </div>
         <h1 style={{ fontSize: 42, letterSpacing: '-0.02em' }}>CropGrid</h1>
         <p style={{ color: 'var(--slate-500)', fontSize: 16, marginTop: 10, maxWidth: 440 }}>
-          Crop into parts — split one image into perfectly sized sections for every screen,
+          Crop an image into parts — split one image into perfectly sized sections for every screen,
           panel, or billboard.
         </p>
       </div>
@@ -50,7 +65,7 @@ export default function UploadScreen({ onFile, error }) {
         }}
         onDragLeave={() => setDragActive(false)}
         onDrop={onDrop}
-        className="card"
+        className={`card cropgrid-dropzone${dragActive ? ' active' : ''}`}
         style={{
           width: 'min(560px, 90vw)',
           padding: '64px 32px',
@@ -68,7 +83,7 @@ export default function UploadScreen({ onFile, error }) {
       >
         <UploadGlyph active={dragActive} />
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 17, color: 'var(--ink-900)' }}>
-          Click to upload or drag your photo here
+          Upload your photo to start cropping
         </div>
         <div className="mono" style={{ fontSize: 12, color: 'var(--slate-400)' }}>
           JPG · PNG · WEBP
@@ -95,9 +110,32 @@ export default function UploadScreen({ onFile, error }) {
 function UploadGlyph({ active }) {
   const stroke = active ? 'var(--blue-500)' : 'var(--ink-700)'
   return (
-    <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
-      <rect x="3" y="3" width="38" height="38" rx="3" stroke={stroke} strokeWidth="1.5" strokeDasharray="4 3" />
-      <path d="M22 30V14M22 14L16 20M22 14L28 20" stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className="cropgrid-glyph"
+      width="44"
+      height="44"
+      viewBox="0 0 44 44"
+      fill="none"
+      style={{ animationPlayState: active ? 'paused' : 'running' }}
+    >
+      <rect
+        className="cropgrid-dash"
+        x="3"
+        y="3"
+        width="38"
+        height="38"
+        rx="3"
+        stroke={stroke}
+        strokeWidth="1.5"
+        strokeDasharray="4 3"
+      />
+      <path
+        d="M22 30V14M22 14L16 20M22 14L28 20"
+        stroke={stroke}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

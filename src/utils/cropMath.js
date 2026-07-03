@@ -254,7 +254,7 @@ export function analyzeCustomSections(sections, imageW, imageH) {
   }
   const coveredCount = covered.reduce((s, v) => s + v, 0)
   const coveragePct = sections.length === 0 ? 0 : (coveredCount / (GRID * GRID)) * 100
-  const hasGaps = sections.length > 0 && coveragePct < 99.5
+  const hasGaps = sections.length > 0 && coveragePct < 100
 
   return { overlappingIds, hasGaps, coveragePct }
 }
